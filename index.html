@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Endgame — Play Chess</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="table">
+
+  <header class="masthead">
+    <div class="masthead-mark">♞</div>
+    <div class="masthead-text">
+      <h1>Endgame</h1>
+      <p class="masthead-sub">A quiet board for a slow game.</p>
+    </div>
+  </header>
+
+  <main class="layout">
+
+    <section class="board-wrap">
+      <div class="board-frame">
+        <div class="files-row files-top" aria-hidden="true"></div>
+        <div class="board-and-ranks">
+          <div class="ranks-col" aria-hidden="true"></div>
+          <div id="board" class="board" role="grid" aria-label="Chess board"></div>
+          <div class="ranks-col ranks-col-right" aria-hidden="true"></div>
+        </div>
+        <div class="files-row files-bottom" aria-hidden="true"></div>
+      </div>
+
+      <div class="status-bar">
+        <div id="status" class="status" aria-live="polite">White to move</div>
+        <div class="controls">
+          <button id="newGameBtn" class="btn btn-primary">New game</button>
+          <button id="undoBtn" class="btn">Undo</button>
+          <button id="flipBtn" class="btn">Flip board</button>
+        </div>
+      </div>
+    </section>
+
+    <aside class="sidebar">
+
+      <div class="panel mode-panel">
+        <h2 class="panel-title">Opponent</h2>
+        <div class="mode-toggle" id="modeToggle">
+          <button class="mode-option active" data-mode="two-player">Two players</button>
+          <button class="mode-option" data-mode="computer">Vs. computer</button>
+        </div>
+        <div class="mode-toggle difficulty-toggle hidden" id="difficultyToggle">
+          <button class="mode-option" data-difficulty="easy">Easy</button>
+          <button class="mode-option active" data-difficulty="medium">Medium</button>
+          <button class="mode-option" data-difficulty="hard">Hard</button>
+        </div>
+      </div>
+
+      <div class="panel captures-panel">
+        <h2 class="panel-title">Captured</h2>
+        <div class="captures-row">
+          <span class="captures-label">White has taken</span>
+          <div id="capturedByWhite" class="captured-pieces"></div>
+        </div>
+        <div class="captures-row">
+          <span class="captures-label">Black has taken</span>
+          <div id="capturedByBlack" class="captured-pieces"></div>
+        </div>
+      </div>
+
+      <div class="panel moves-panel">
+        <h2 class="panel-title">Moves</h2>
+        <ol id="moveList" class="move-list"></ol>
+      </div>
+
+    </aside>
+
+  </main>
+
+  <div id="promoModal" class="modal hidden">
+    <div class="modal-card">
+      <p class="modal-title">Promote your pawn</p>
+      <div id="promoChoices" class="promo-choices"></div>
+    </div>
+  </div>
+
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
