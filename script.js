@@ -4,6 +4,25 @@
                       col 0 = file a,      col 7 = file h.
    ============================================================ */
 
+import { initializeApp } from "https://www.gstatic.com/firebasejs/12.8.0/firebase-app.js";
+import {
+  getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
+  collection, query, orderBy, limit, increment, serverTimestamp
+} from "https://www.gstatic.com/firebasejs/12.8.0/firebase-firestore.js";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAlK-tULhM2KG_kFweHbbr7-KKWZ1rwFsQ",
+  authDomain: "chess-fa228.firebaseapp.com",
+  projectId: "chess-fa228",
+  storageBucket: "chess-fa228.firebasestorage.app",
+  messagingSenderId: "987094390034",
+  appId: "1:987094390034:web:62f7ffa53c569c33ef4fcb",
+  measurementId: "G-CQVRMTNV7Q"
+};
+
+const fbApp = initializeApp(firebaseConfig);
+const db = getFirestore(fbApp);
+
 const FILES = ['a','b','c','d','e','f','g','h'];
 
 const UNICODE = {
@@ -52,9 +71,10 @@ function newGame(){
     capturedByBlack: [],     // white pieces black has taken
     over: false,
     result: null,
+    lastMove: null,
     flipped: false,
-    mode: 'two-player',
-    difficulty: 'medium',
+    mode: game ? game.mode : 'two-player',
+    difficulty: game ? game.difficulty : 'medium',
     selected: null,
     legalMovesForSelected: []
   };
@@ -404,9 +424,17 @@ function playMove(move){
   if(!gameOver && game.mode === 'computer' && game.turn === 'b'){
     setTimeout(computerMove, 350);
   }
+
+  if(game.mode === 'online' && online.roomCode){
+    const payload = serializeRoomFromGame();
+    if(gameOver) payload.status = 'finished';
+    updateDoc(doc(db, 'rooms', online.roomCode), payload).catch(err => console.error('sync failed', err));
+    if(gameOver) recordOnlineGameEnd(color, resultText);
+  }
 }
 
 function undoMove(){
+  if(game.mode === 'online') return;
   if(game.history.length === 0) return;
   const last = game.history.pop();
   game.board = last.snapshot.board;
@@ -608,6 +636,7 @@ function render(){
 function onSquareClick(e){
   if(game.over) return;
   if(game.mode === 'computer' && game.turn === 'b') return;
+  if(game.mode === 'online' && (online.status !== 'active' || game.turn !== online.myColor)) return;
 
   const r = parseInt(e.currentTarget.dataset.r, 10);
   const c = parseInt(e.currentTarget.dataset.c, 10);
@@ -703,9 +732,368 @@ function updateCaptures(){
   capturedByBlackEl.textContent = game.capturedByBlack.map(p => UNICODE['w'][p.type]).join(' ');
 }
 
+/* ---------------- Username system ---------------- */
+
+const usernameBtn = document.getElementById('usernameBtn');
+const usernameModal = document.getElementById('usernameModal');
+const usernameInput = document.getElementById('usernameInput');
+const usernameError = document.getElementById('usernameError');
+const usernameSaveBtn = document.getElementById('usernameSaveBtn');
+
+function playerDocId(name){
+  return (name || '').trim().toLowerCase().replace(/[^a-z0-9_-]/g, '_').slice(0, 40) || 'guest';
+}
+
+function ensureUsername(){
+  let name = localStorage.getItem('endgame_username');
+  if(!name){
+    name = 'Guest' + Math.floor(1000 + Math.random() * 9000);
+    localStorage.setItem('endgame_username', name);
+  }
+  return name;
+}
+
+let myUsername = ensureUsername();
+
+async function upsertPlayerDoc(name){
+  try{
+    const ref = doc(db, 'players', playerDocId(name));
+    const snap = await getDoc(ref);
+    if(!snap.exists()){
+      await setDoc(ref, { username: name, wins: 0, losses: 0, draws: 0, updatedAt: serverTimestamp() });
+    } else {
+      await updateDoc(ref, { username: name, updatedAt: serverTimestamp() });
+    }
+  }catch(err){
+    console.error('Could not save player profile', err);
+  }
+}
+
+function openUsernameModal(){
+  usernameInput.value = myUsername;
+  usernameError.classList.add('hidden');
+  usernameModal.classList.remove('hidden');
+  usernameInput.focus();
+  usernameInput.select();
+}
+
+usernameBtn.addEventListener('click', openUsernameModal);
+
+usernameSaveBtn.addEventListener('click', () => {
+  const name = usernameInput.value.trim().slice(0, 18);
+  if(name.length < 2){
+    usernameError.textContent = 'Please enter at least 2 characters.';
+    usernameError.classList.remove('hidden');
+    return;
+  }
+  myUsername = name;
+  localStorage.setItem('endgame_username', name);
+  usernameBtn.textContent = name;
+  usernameModal.classList.add('hidden');
+  upsertPlayerDoc(name);
+});
+
+usernameInput.addEventListener('keydown', (e) => {
+  if(e.key === 'Enter') usernameSaveBtn.click();
+});
+
+usernameBtn.textContent = myUsername;
+upsertPlayerDoc(myUsername);
+
+/* ---------------- Live leaderboard ---------------- */
+
+const leaderboardListEl = document.getElementById('leaderboardList');
+
+function renderLeaderboard(rows){
+  leaderboardListEl.innerHTML = '';
+  if(rows.length === 0){
+    leaderboardListEl.innerHTML = '<li class="leaderboard-empty">No games recorded yet — play one online!</li>';
+    return;
+  }
+  rows.forEach((r, i) => {
+    const li = document.createElement('li');
+    const rank = document.createElement('span');
+    rank.className = 'lb-rank';
+    rank.textContent = (i + 1) + '.';
+    const name = document.createElement('span');
+    name.className = 'lb-name';
+    name.textContent = r.username || 'Guest';
+    const rec = document.createElement('span');
+    rec.className = 'lb-record';
+    rec.textContent = `${r.wins || 0}W ${r.losses || 0}L ${r.draws || 0}D`;
+    li.appendChild(rank);
+    li.appendChild(name);
+    li.appendChild(rec);
+    leaderboardListEl.appendChild(li);
+  });
+}
+
+function subscribeLeaderboard(){
+  try{
+    const q = query(collection(db, 'players'), orderBy('wins', 'desc'), limit(20));
+    onSnapshot(q, (snap) => {
+      const rows = [];
+      snap.forEach(d => rows.push(d.data()));
+      renderLeaderboard(rows);
+    }, (err) => {
+      console.error('Leaderboard listener error', err);
+      leaderboardListEl.innerHTML = '<li class="leaderboard-empty">Leaderboard unavailable right now.</li>';
+    });
+  }catch(err){
+    console.error(err);
+  }
+}
+
+async function recordResult(winnerName, loserName){
+  try{
+    await setDoc(doc(db, 'players', playerDocId(winnerName)),
+      { username: winnerName, wins: increment(1), losses: increment(0), draws: increment(0), updatedAt: serverTimestamp() },
+      { merge: true });
+    await setDoc(doc(db, 'players', playerDocId(loserName)),
+      { username: loserName, wins: increment(0), losses: increment(1), draws: increment(0), updatedAt: serverTimestamp() },
+      { merge: true });
+  }catch(err){
+    console.error('Could not record result', err);
+  }
+}
+
+async function recordDraw(nameA, nameB){
+  try{
+    for(const n of [nameA, nameB]){
+      await setDoc(doc(db, 'players', playerDocId(n)),
+        { username: n, wins: increment(0), losses: increment(0), draws: increment(1), updatedAt: serverTimestamp() },
+        { merge: true });
+    }
+  }catch(err){
+    console.error('Could not record draw', err);
+  }
+}
+
+/* ---------------- Online multiplayer rooms ---------------- */
+
+const ROOM_CODE_CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O or 1/I
+function generateRoomCode(){
+  let s = '';
+  for(let i=0;i<5;i++) s += ROOM_CODE_CHARS[Math.floor(Math.random() * ROOM_CODE_CHARS.length)];
+  return s;
+}
+
+const online = {
+  roomCode: null,
+  myColor: null,
+  status: 'idle', // idle | waiting | active | finished | abandoned
+  players: null,
+  unsub: null
+};
+
+const onlinePanelEl = document.getElementById('onlinePanel');
+const onlineLobbyEl = document.getElementById('onlineLobby');
+const onlineActiveEl = document.getElementById('onlineActive');
+const onlineErrorEl = document.getElementById('onlineError');
+const roomCodeDisplayEl = document.getElementById('roomCodeDisplay');
+const onlineStatusTextEl = document.getElementById('onlineStatusText');
+const joinRoomInput = document.getElementById('joinRoomInput');
+const createRoomBtn = document.getElementById('createRoomBtn');
+const joinRoomBtn = document.getElementById('joinRoomBtn');
+const leaveRoomBtn = document.getElementById('leaveRoomBtn');
+
+function showOnlineError(msg){
+  onlineErrorEl.textContent = msg;
+  onlineErrorEl.classList.remove('hidden');
+}
+
+function resetOnlineUI(){
+  online.roomCode = null;
+  online.myColor = null;
+  online.status = 'idle';
+  online.players = null;
+  if(online.unsub){ online.unsub(); online.unsub = null; }
+  onlineLobbyEl.classList.remove('hidden');
+  onlineActiveEl.classList.add('hidden');
+  onlineErrorEl.classList.add('hidden');
+  joinRoomInput.value = '';
+}
+
+function serializeRoomFromGame(){
+  return {
+    boardJSON: JSON.stringify(game.board),
+    turn: game.turn,
+    castling: { ...game.castling },
+    enPassant: game.enPassant || null,
+    capturedByWhite: game.capturedByWhite,
+    capturedByBlack: game.capturedByBlack,
+    historyNotation: game.history.map(h => h.notation),
+    over: game.over,
+    result: game.result,
+    lastMove: game.lastMove || null
+  };
+}
+
+function loadRemoteState(data){
+  if(!data.boardJSON) return;
+  game.board = JSON.parse(data.boardJSON);
+  game.turn = data.turn;
+  game.castling = data.castling;
+  game.enPassant = data.enPassant || null;
+  game.capturedByWhite = data.capturedByWhite || [];
+  game.capturedByBlack = data.capturedByBlack || [];
+  game.over = !!data.over;
+  game.result = data.result || null;
+  game.lastMove = data.lastMove || null;
+  game.history = (data.historyNotation || []).map(n => ({ notation: n }));
+  game.selected = null;
+  game.legalMovesForSelected = [];
+  render();
+  updateMoveList();
+  updateCaptures();
+  updateStatus();
+}
+
+function updateOnlineStatusText(){
+  const players = online.players || {};
+  const oppColor = online.myColor === 'w' ? 'b' : 'w';
+  const oppName = players[oppColor];
+  if(game.over){
+    onlineStatusTextEl.textContent = (game.result || 'Game over') + '.';
+  } else if(!oppName){
+    onlineStatusTextEl.textContent = 'Share the code — waiting for an opponent…';
+  } else {
+    const myTurn = game.turn === online.myColor;
+    onlineStatusTextEl.textContent = `Playing ${oppName} — you are ${online.myColor === 'w' ? 'White' : 'Black'} — ${myTurn ? 'your move' : "opponent's move"}.`;
+  }
+}
+
+function recordOnlineGameEnd(moverColor, resultText){
+  const players = online.players;
+  if(!players || !players.w || !players.b) return;
+  if(resultText && /checkmate/i.test(resultText)){
+    const winnerName = moverColor === 'w' ? players.w : players.b;
+    const loserName = moverColor === 'w' ? players.b : players.w;
+    recordResult(winnerName, loserName);
+  } else if(resultText && /(stalemate|draw)/i.test(resultText)){
+    recordDraw(players.w, players.b);
+  }
+}
+
+function subscribeRoom(code){
+  const ref = doc(db, 'rooms', code);
+  online.unsub = onSnapshot(ref, (snap) => {
+    if(!snap.exists()) return;
+    const data = snap.data();
+    online.players = data.players || online.players;
+    online.status = data.status || online.status;
+    loadRemoteState(data);
+    updateOnlineStatusText();
+  }, (err) => {
+    console.error('Room listener error', err);
+    showOnlineError('Lost connection to the room.');
+  });
+}
+
+function startFreshOnlineGame(){
+  newGame();
+  game.mode = 'online';
+}
+
+async function createRoom(){
+  onlineErrorEl.classList.add('hidden');
+  createRoomBtn.disabled = true;
+  const code = generateRoomCode();
+  startFreshOnlineGame();
+  online.roomCode = code;
+  online.myColor = 'w';
+  online.status = 'waiting';
+  online.players = { w: myUsername, b: null };
+  const initial = serializeRoomFromGame();
+  initial.players = { w: myUsername, b: null };
+  initial.status = 'waiting';
+  try{
+    await setDoc(doc(db, 'rooms', code), initial);
+    subscribeRoom(code);
+    onlineLobbyEl.classList.add('hidden');
+    onlineActiveEl.classList.remove('hidden');
+    roomCodeDisplayEl.textContent = code;
+    updateOnlineStatusText();
+  }catch(err){
+    console.error(err);
+    showOnlineError('Could not create a room — check your connection and Firestore setup.');
+    online.status = 'idle';
+  }finally{
+    createRoomBtn.disabled = false;
+  }
+}
+
+async function joinRoom(){
+  const code = joinRoomInput.value.trim().toUpperCase();
+  onlineErrorEl.classList.add('hidden');
+  if(code.length !== 5){
+    showOnlineError('Enter the 5-character room code.');
+    return;
+  }
+  joinRoomBtn.disabled = true;
+  try{
+    const ref = doc(db, 'rooms', code);
+    const snap = await getDoc(ref);
+    if(!snap.exists()){
+      showOnlineError('No room found with that code.');
+      return;
+    }
+    const data = snap.data();
+    if(data.status !== 'waiting'){
+      showOnlineError('That room is not open for joining.');
+      return;
+    }
+    await updateDoc(ref, { 'players.b': myUsername, status: 'active' });
+    startFreshOnlineGame();
+    online.roomCode = code;
+    online.myColor = 'b';
+    online.status = 'active';
+    online.players = { w: data.players.w, b: myUsername };
+    subscribeRoom(code);
+    onlineLobbyEl.classList.add('hidden');
+    onlineActiveEl.classList.remove('hidden');
+    roomCodeDisplayEl.textContent = code;
+    updateOnlineStatusText();
+  }catch(err){
+    console.error(err);
+    showOnlineError('Could not join that room — check your connection and Firestore setup.');
+  }finally{
+    joinRoomBtn.disabled = false;
+  }
+}
+
+async function leaveOrResign(){
+  if(online.status === 'active' && !game.over){
+    const players = online.players || {};
+    const oppColor = online.myColor === 'w' ? 'b' : 'w';
+    const oppName = players[oppColor];
+    const myName = players[online.myColor];
+    game.over = true;
+    game.result = (oppColor === 'w' ? 'White' : 'Black') + ' wins — opponent resigned';
+    try{
+      const payload = serializeRoomFromGame();
+      payload.status = 'finished';
+      await updateDoc(doc(db, 'rooms', online.roomCode), payload);
+    }catch(err){ console.error(err); }
+    if(oppName && myName) recordResult(oppName, myName);
+  } else if(online.roomCode){
+    try{ await updateDoc(doc(db, 'rooms', online.roomCode), { status: 'abandoned' }); }catch(err){ /* ignore */ }
+  }
+  resetOnlineUI();
+  render();
+  updateStatus();
+}
+
+createRoomBtn.addEventListener('click', () => { if(online.status === 'idle') createRoom(); });
+joinRoomBtn.addEventListener('click', () => { if(online.status === 'idle') joinRoom(); });
+leaveRoomBtn.addEventListener('click', leaveOrResign);
+joinRoomInput.addEventListener('input', () => { joinRoomInput.value = joinRoomInput.value.toUpperCase(); });
+joinRoomInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') joinRoomBtn.click(); });
+
 /* ---------------- Controls ---------------- */
 
 document.getElementById('newGameBtn').addEventListener('click', () => {
+  if(game.mode === 'online') return;
   const mode = game ? game.mode : 'two-player';
   const difficulty = game ? game.difficulty : 'medium';
   newGame();
@@ -723,10 +1111,21 @@ document.getElementById('flipBtn').addEventListener('click', () => {
 document.getElementById('modeToggle').addEventListener('click', (e) => {
   const btn = e.target.closest('.mode-option');
   if(!btn) return;
+  const newMode = btn.dataset.mode;
+  if(newMode === game.mode) return;
+
+  if(game.mode === 'online' && online.roomCode){
+    if(online.status === 'active' && !game.over){
+      updateDoc(doc(db, 'rooms', online.roomCode), { status: 'abandoned' }).catch(()=>{});
+    }
+    resetOnlineUI();
+  }
+
   document.querySelectorAll('#modeToggle .mode-option').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
-  game.mode = btn.dataset.mode;
+  game.mode = newMode;
   difficultyToggleEl.classList.toggle('hidden', game.mode !== 'computer');
+  onlinePanelEl.classList.toggle('hidden', game.mode !== 'online');
 });
 
 const difficultyToggleEl = document.getElementById('difficultyToggle');
@@ -741,3 +1140,4 @@ difficultyToggleEl.addEventListener('click', (e) => {
 /* ---------------- Boot ---------------- */
 
 newGame();
+subscribeLeaderboard();

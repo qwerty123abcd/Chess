@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Endgame — Play Chess</title>
 <link rel="stylesheet" href="style.css">
-<link rel="icon" type="image/png" href="chess-knight-alt.png">
 </head>
 <body>
 
@@ -16,6 +15,10 @@
     <div class="masthead-text">
       <h1>Endgame</h1>
       <p class="masthead-sub">A quiet board for a slow game.</p>
+    </div>
+    <div class="whoami">
+      <span class="whoami-label">Playing as</span>
+      <button id="usernameBtn" class="whoami-name">…</button>
     </div>
   </header>
 
@@ -49,12 +52,43 @@
         <div class="mode-toggle" id="modeToggle">
           <button class="mode-option active" data-mode="two-player">Two players</button>
           <button class="mode-option" data-mode="computer">Vs. computer</button>
+          <button class="mode-option" data-mode="online">Online</button>
         </div>
         <div class="mode-toggle difficulty-toggle hidden" id="difficultyToggle">
           <button class="mode-option" data-difficulty="easy">Easy</button>
           <button class="mode-option active" data-difficulty="medium">Medium</button>
           <button class="mode-option" data-difficulty="hard">Hard</button>
         </div>
+
+        <div class="online-panel hidden" id="onlinePanel">
+
+          <div id="onlineLobby" class="online-block">
+            <div class="online-row">
+              <button id="createRoomBtn" class="btn btn-primary btn-block">Create room</button>
+            </div>
+            <div class="online-divider">or</div>
+            <div class="online-row online-join-row">
+              <input id="joinRoomInput" class="text-input" maxlength="5" placeholder="Room code" autocomplete="off">
+              <button id="joinRoomBtn" class="btn">Join</button>
+            </div>
+            <p id="onlineError" class="online-error hidden"></p>
+          </div>
+
+          <div id="onlineActive" class="online-block hidden">
+            <div class="room-code-row">
+              <span class="room-code-label">Room</span>
+              <span id="roomCodeDisplay" class="room-code"></span>
+            </div>
+            <p id="onlineStatusText" class="online-status-text">Waiting for an opponent…</p>
+            <button id="leaveRoomBtn" class="btn btn-danger btn-block">Leave / Resign</button>
+          </div>
+
+        </div>
+      </div>
+
+      <div class="panel leaderboard-panel">
+        <h2 class="panel-title">Leaderboard</h2>
+        <ol id="leaderboardList" class="leaderboard-list"></ol>
       </div>
 
       <div class="panel captures-panel">
@@ -85,8 +119,18 @@
     </div>
   </div>
 
+  <div id="usernameModal" class="modal hidden">
+    <div class="modal-card">
+      <p class="modal-title">Choose a username</p>
+      <p class="modal-sub">This name appears on the global leaderboard.</p>
+      <input id="usernameInput" class="text-input" maxlength="18" placeholder="Your name" autocomplete="off">
+      <p id="usernameError" class="online-error hidden"></p>
+      <button id="usernameSaveBtn" class="btn btn-primary btn-block">Save</button>
+    </div>
+  </div>
+
 </div>
 
-<script src="script.js"></script>
+<script type="module" src="script.js"></script>
 </body>
 </html>
