@@ -60,7 +60,10 @@ function freshBoard(){
 
 let game = null;
 
-function newGame(){
+function newGame(opts = {}){
+  const prev = game;
+  clearTimeout(botTimer);
+  clearTimeout(overTimer);
   game = {
     board: freshBoard(),
     turn: 'w',
@@ -71,16 +74,26 @@ function newGame(){
     capturedByBlack: [],     // white pieces black has taken
     over: false,
     result: null,
+    winner: null,            // 'w' | 'b' | 'draw' | null
+    endReason: null,         // 'checkmate' | 'stalemate' | 'resign'
+    overShown: false,
     lastMove: null,
     flipped: false,
-    mode: game ? game.mode : 'two-player',
-    difficulty: game ? game.difficulty : 'medium',
+    mode: opts.mode || (prev ? prev.mode : 'two-player'),
+    difficulty: opts.difficulty || (prev ? prev.difficulty : 'medium'),
+    humanColor: opts.humanColor || (prev ? prev.humanColor : 'w'),
     selected: null,
     legalMovesForSelected: []
   };
+  if(game.mode === 'computer' && game.humanColor === 'b') game.flipped = true;
   render();
   updateStatus();
 }
+
+let botTimer = null;
+let overTimer = null;
+
+function botColor(){ return game.humanColor === 'w' ? 'b' : 'w'; }
 
 /* ---------------- Attack / check detection ---------------- */
 
@@ -411,6 +424,10 @@ function playMove(move){
   game.history.push({ notation, snapshot, color, captured, move });
   game.over = gameOver;
   game.result = resultText;
+  if(gameOver){
+    game.endReason = opponentInCheck ? 'checkmate' : 'stalemate';
+    game.winner = opponentInCheck ? color : 'draw';
+  }
 
   game.lastMove = { from: move.from, to: move.to };
   game.selected = null;
@@ -421,8 +438,13 @@ function playMove(move){
   updateCaptures();
   updateStatus();
 
-  if(!gameOver && game.mode === 'computer' && game.turn === 'b'){
-    setTimeout(computerMove, 350);
+  if(gameOver && opponentInCheck) flashBanner('Checkmate', 'mate');
+  else if(opponentInCheck) flashBanner('Check!', 'check');
+
+  if(gameOver) scheduleGameOver();
+
+  if(!gameOver && game.mode === 'computer' && game.turn === botColor()){
+    botTimer = setTimeout(computerMove, 450);
   }
 
   if(game.mode === 'online' && online.roomCode){
@@ -433,9 +455,7 @@ function playMove(move){
   }
 }
 
-function undoMove(){
-  if(game.mode === 'online') return;
-  if(game.history.length === 0) return;
+function undoOnce(){
   const last = game.history.pop();
   game.board = last.snapshot.board;
   game.turn = last.snapshot.turn;
@@ -443,6 +463,9 @@ function undoMove(){
   game.enPassant = last.snapshot.enPassant;
   game.over = false;
   game.result = null;
+  game.winner = null;
+  game.endReason = null;
+  game.overShown = false;
   game.selected = null;
   game.legalMovesForSelected = [];
 
@@ -454,11 +477,28 @@ function undoMove(){
   game.lastMove = game.history.length
     ? game.history[game.history.length - 1].move || null
     : null;
+}
+
+function undoMove(){
+  if(game.mode === 'online') return;
+  if(game.history.length === 0) return;
+  clearTimeout(botTimer);
+  clearTimeout(overTimer);
+  undoOnce();
+  // Against the computer, step back until it's the human's turn again.
+  if(game.mode === 'computer' && game.turn !== game.humanColor && game.history.length > 0){
+    undoOnce();
+  }
 
   render();
   updateMoveList();
   updateCaptures();
   updateStatus();
+
+  // If undoing left the computer to move (e.g. human is Black and it is White's first move), let it play.
+  if(game.mode === 'computer' && game.turn === botColor()){
+    botTimer = setTimeout(computerMove, 450);
+  }
 }
 
 /* ---------------- Simple AI (minimax + alpha-beta, depth 3) ---------------- */
@@ -541,35 +581,38 @@ function minimax(board, state, depth, alpha, beta, maximizing){
 const DIFFICULTY_DEPTH = { easy: 1, medium: 2, hard: 3 };
 
 function computerMove(){
-  if(game.over) return;
-  const moves = allLegalMoves('b');
+  if(game.over || game.mode !== 'computer') return;
+  const bot = botColor();
+  if(game.turn !== bot) return;
+  const moves = allLegalMoves(bot);
   if(moves.length === 0) return;
 
-  // Easy mode: mostly random, with only a mild preference for not hanging pieces for free.
+  // Easy mode: mostly random.
   if(game.difficulty === 'easy' && Math.random() < 0.7){
-    const chosen = moves[Math.floor(Math.random()*moves.length)];
-    playMove(chosen);
+    playMove(moves[Math.floor(Math.random()*moves.length)]);
     return;
   }
 
+  const botIsWhite = bot === 'w';
   const depth = DIFFICULTY_DEPTH[game.difficulty] || 2;
   const ordered = orderMoves(moves, game.board);
   let bestMoves = [];
-  let bestScore = Infinity;
+  let bestScore = botIsWhite ? -Infinity : Infinity;
   for(const m of ordered){
     const b2 = cloneBoard(game.board);
     const s2 = { castling: {...game.castling}, enPassant: game.enPassant };
     applyMove(b2, s2, m);
-    const score = minimax(b2, s2, depth, -Infinity, Infinity, true);
-    if(score < bestScore){
+    // After the bot moves, the opponent is to move: white maximizes, black minimizes.
+    const score = minimax(b2, s2, depth, -Infinity, Infinity, !botIsWhite);
+    const better = botIsWhite ? score > bestScore : score < bestScore;
+    if(better){
       bestScore = score;
       bestMoves = [m];
     } else if(score === bestScore){
       bestMoves.push(m);
     }
   }
-  const chosen = bestMoves[Math.floor(Math.random()*bestMoves.length)];
-  playMove(chosen);
+  playMove(bestMoves[Math.floor(Math.random()*bestMoves.length)]);
 }
 
 /* ---------------- Rendering ---------------- */
@@ -583,14 +626,35 @@ const promoModal = document.getElementById('promoModal');
 const promoChoices = document.getElementById('promoChoices');
 
 function displayCoords(){
-  const rows = game.flipped ? [...Array(8).keys()] : [...Array(8).keys()].reverse();
-  const cols = game.flipped ? [...Array(8).keys()].reverse() : [...Array(8).keys()];
+  // Unflipped: rank 8 at the top, file a on the left (White at the bottom).
+  const fwd = [0,1,2,3,4,5,6,7];
+  const rev = [7,6,5,4,3,2,1,0];
+  const rows = game.flipped ? rev : fwd;
+  const cols = game.flipped ? rev : fwd;
   return { rows, cols };
+}
+
+/* Squares of enemy pieces currently giving check to `color`'s king. */
+function findCheckers(board, color){
+  const k = findKing(board, color);
+  if(!k) return [];
+  const enemy = color === 'w' ? 'b' : 'w';
+  const out = [];
+  for(let r=0;r<8;r++) for(let c=0;c<8;c++){
+    const p = board[r][c];
+    if(!p || p.color !== enemy) continue;
+    const hits = generatePieceMoves(board, r, c, { castling: {wK:false,wQ:false,bK:false,bQ:false}, enPassant: null })
+      .some(m => m.to.r === k.r && m.to.c === k.c);
+    if(hits) out.push({ r, c });
+  }
+  return out;
 }
 
 function render(){
   boardEl.innerHTML = '';
   const { rows, cols } = displayCoords();
+  const checkedColor = ['w','b'].find(col => inCheck(game.board, col)) || null;
+  const checkers = checkedColor ? findCheckers(game.board, checkedColor) : [];
 
   for(const r of rows){
     for(const c of cols){
@@ -615,9 +679,13 @@ function render(){
         span.textContent = UNICODE[piece.color][piece.type];
         square.appendChild(span);
 
-        if(piece.type === 'k' && inCheck(game.board, piece.color)){
+        if(piece.type === 'k' && piece.color === checkedColor){
           square.classList.add('king-check');
         }
+      }
+
+      if(checkers.some(ck => ck.r === r && ck.c === c)){
+        square.classList.add('checker');
       }
 
       const isLegalTarget = game.legalMovesForSelected.find(m => m.to.r===r && m.to.c===c);
@@ -635,7 +703,7 @@ function render(){
 
 function onSquareClick(e){
   if(game.over) return;
-  if(game.mode === 'computer' && game.turn === 'b') return;
+  if(game.mode === 'computer' && game.turn !== game.humanColor) return;
   if(game.mode === 'online' && (online.status !== 'active' || game.turn !== online.myColor)) return;
 
   const r = parseInt(e.currentTarget.dataset.r, 10);
@@ -689,20 +757,144 @@ function askPromotion(r, c, callback){
   promoModal.classList.remove('hidden');
 }
 
+/* ---------------- Status, check banner and game-over screen ---------------- */
+
+const boardFrameEl = document.getElementById('boardFrame');
+const boardSurfaceEl = document.getElementById('boardSurface');
+const checkBannerEl = document.getElementById('checkBanner');
+const gameInfoTitleEl = document.getElementById('gameInfoTitle');
+const gameInfoTextEl = document.getElementById('gameInfoText');
+
+function cap(str){ return str.charAt(0).toUpperCase() + str.slice(1); }
+
 function updateStatus(){
   statusEl.classList.remove('check','win');
+  const checkedNow = !game.over && inCheck(game.board, game.turn);
+  const mated = game.over && game.endReason === 'checkmate';
+  boardFrameEl.classList.toggle('in-check', checkedNow || mated);
+
   if(game.over){
     statusEl.textContent = game.result;
-    statusEl.classList.add('win');
-    return;
-  }
-  const turnName = game.turn === 'w' ? 'White' : 'Black';
-  if(inCheck(game.board, game.turn)){
-    statusEl.textContent = turnName + ' is in check';
-    statusEl.classList.add('check');
+    statusEl.classList.add(mated ? 'check' : 'win');
   } else {
-    statusEl.textContent = turnName + ' to move';
+    const turnName = game.turn === 'w' ? 'White' : 'Black';
+    if(checkedNow){
+      statusEl.textContent = turnName + ' is in check!';
+      statusEl.classList.add('check');
+    } else {
+      statusEl.textContent = turnName + ' to move';
+    }
   }
+  updateGameInfo();
+}
+
+function updateGameInfo(){
+  if(!game) return;
+  let title = '';
+  let text = '';
+  if(game.mode === 'computer'){
+    const you = game.humanColor === 'w' ? 'White' : 'Black';
+    title = 'Vs. computer · ' + cap(game.difficulty);
+    if(game.over) text = (game.result || 'Game over') + '.';
+    else text = game.turn === game.humanColor
+      ? `You play ${you} — your move.`
+      : `You play ${you} — the computer is thinking…`;
+  } else if(game.mode === 'online'){
+    title = 'Online' + (online.roomCode ? ' · Room ' + online.roomCode : '');
+    const players = online.players || {};
+    const oppColor = online.myColor === 'w' ? 'b' : 'w';
+    const oppName = players[oppColor];
+    if(game.over) text = (game.result || 'Game over') + '.';
+    else if(!oppName) text = 'Waiting for an opponent…';
+    else text = `Playing ${oppName} as ${online.myColor === 'w' ? 'White' : 'Black'} — ${game.turn === online.myColor ? 'your move' : "opponent's move"}.`;
+  } else {
+    title = 'Free board';
+    text = game.over ? (game.result || 'Game over') + '.' : 'Move both sides. Undo and flip whenever you like.';
+  }
+  gameInfoTitleEl.textContent = title;
+  gameInfoTextEl.textContent = text;
+}
+
+function flashBanner(text, kind){
+  checkBannerEl.textContent = text;
+  checkBannerEl.className = 'check-banner ' + kind;
+  void checkBannerEl.offsetWidth; // restart the CSS animation
+  checkBannerEl.classList.add('show');
+  boardSurfaceEl.classList.remove('shake');
+  void boardSurfaceEl.offsetWidth;
+  boardSurfaceEl.classList.add('shake');
+}
+
+const gameOverModal = document.getElementById('gameOverModal');
+const resultCardEl = document.getElementById('resultCard');
+const resultKickerEl = document.getElementById('resultKicker');
+const resultTitleEl = document.getElementById('resultTitle');
+const resultWEl = document.getElementById('resultW');
+const resultBEl = document.getElementById('resultB');
+const resultMetaEl = document.getElementById('resultMeta');
+const playAgainBtn = document.getElementById('playAgainBtn');
+
+function scheduleGameOver(){
+  if(game.overShown) return;
+  game.overShown = true;
+  clearTimeout(overTimer);
+  const delay = game.endReason === 'checkmate' ? 1500 : game.endReason === 'resign' ? 300 : 900;
+  overTimer = setTimeout(showGameOver, delay);
+}
+
+function playerNames(){
+  if(game.mode === 'computer'){
+    const bot = 'Computer (' + cap(game.difficulty) + ')';
+    return game.humanColor === 'w' ? { w: myUsername + ' (you)', b: bot } : { w: bot, b: myUsername + ' (you)' };
+  }
+  if(game.mode === 'online'){
+    const pl = online.players || {};
+    const tag = (n, col) => (n || (col === 'w' ? 'White' : 'Black')) + (online.myColor === col ? ' (you)' : '');
+    return { w: tag(pl.w, 'w'), b: tag(pl.b, 'b') };
+  }
+  return { w: 'White', b: 'Black' };
+}
+
+function showGameOver(){
+  if(!game.over) return;
+  const winner = game.winner;
+  const perspective = game.mode === 'computer' ? game.humanColor : (game.mode === 'online' ? online.myColor : null);
+
+  let outcome, title;
+  if(winner === 'draw'){
+    outcome = 'draw'; title = 'Draw';
+  } else if(perspective){
+    outcome = winner === perspective ? 'win' : 'loss';
+    title = outcome === 'win' ? 'You won!' : 'You lost';
+  } else {
+    outcome = 'neutral';
+    title = (winner === 'w' ? 'White' : 'Black') + ' wins';
+  }
+
+  const reasons = { checkmate: 'Checkmate', stalemate: 'Stalemate', resign: 'Resignation' };
+  resultKickerEl.textContent = reasons[game.endReason] || 'Game over';
+  resultTitleEl.textContent = title;
+  resultCardEl.className = 'modal-card result-card ' + outcome;
+
+  const names = playerNames();
+  const fill = (el, color) => {
+    el.querySelector('.rp-name').textContent = names[color];
+    const tag = el.querySelector('.rp-tag');
+    el.classList.remove('is-winner', 'is-loser', 'is-draw');
+    if(winner === 'draw'){ tag.textContent = 'Draw'; el.classList.add('is-draw'); }
+    else if(winner === color){ tag.textContent = 'Winner'; el.classList.add('is-winner'); }
+    else { tag.textContent = game.endReason === 'resign' ? 'Resigned' : 'Defeated'; el.classList.add('is-loser'); }
+  };
+  fill(resultWEl, 'w');
+  fill(resultBEl, 'b');
+
+  const moves = Math.ceil(game.history.length / 2);
+  let meta = `${moves} move${moves === 1 ? '' : 's'}`;
+  if(game.mode === 'online') meta += ' · result recorded on the leaderboard';
+  resultMetaEl.textContent = meta;
+
+  playAgainBtn.classList.toggle('hidden', game.mode === 'online');
+  gameOverModal.classList.remove('hidden');
 }
 
 function updateMoveList(){
@@ -802,30 +994,36 @@ upsertPlayerDoc(myUsername);
 
 /* ---------------- Live leaderboard ---------------- */
 
-const leaderboardListEl = document.getElementById('leaderboardList');
+const leaderboardListEls = [
+  document.getElementById('leaderboardList'),
+  document.getElementById('leaderboardListGame')
+];
 
 function renderLeaderboard(rows){
-  leaderboardListEl.innerHTML = '';
-  if(rows.length === 0){
-    leaderboardListEl.innerHTML = '<li class="leaderboard-empty">No games recorded yet — play one online!</li>';
-    return;
+  for(const listEl of leaderboardListEls){
+    listEl.innerHTML = '';
+    if(rows.length === 0){
+      listEl.innerHTML = '<li class="leaderboard-empty">No games recorded yet — play one online!</li>';
+      continue;
+    }
+    rows.forEach((r, i) => {
+      const li = document.createElement('li');
+      if(r.username === myUsername) li.className = 'is-me';
+      const rank = document.createElement('span');
+      rank.className = 'lb-rank';
+      rank.textContent = (i + 1) + '.';
+      const name = document.createElement('span');
+      name.className = 'lb-name';
+      name.textContent = r.username || 'Guest';
+      const rec = document.createElement('span');
+      rec.className = 'lb-record';
+      rec.textContent = `${r.wins || 0}W ${r.losses || 0}L ${r.draws || 0}D`;
+      li.appendChild(rank);
+      li.appendChild(name);
+      li.appendChild(rec);
+      listEl.appendChild(li);
+    });
   }
-  rows.forEach((r, i) => {
-    const li = document.createElement('li');
-    const rank = document.createElement('span');
-    rank.className = 'lb-rank';
-    rank.textContent = (i + 1) + '.';
-    const name = document.createElement('span');
-    name.className = 'lb-name';
-    name.textContent = r.username || 'Guest';
-    const rec = document.createElement('span');
-    rec.className = 'lb-record';
-    rec.textContent = `${r.wins || 0}W ${r.losses || 0}L ${r.draws || 0}D`;
-    li.appendChild(rank);
-    li.appendChild(name);
-    li.appendChild(rec);
-    leaderboardListEl.appendChild(li);
-  });
 }
 
 function subscribeLeaderboard(){
@@ -837,7 +1035,7 @@ function subscribeLeaderboard(){
       renderLeaderboard(rows);
     }, (err) => {
       console.error('Leaderboard listener error', err);
-      leaderboardListEl.innerHTML = '<li class="leaderboard-empty">Leaderboard unavailable right now.</li>';
+      leaderboardListEls.forEach(el => { el.innerHTML = '<li class="leaderboard-empty">Leaderboard unavailable right now.</li>'; });
     });
   }catch(err){
     console.error(err);
@@ -886,12 +1084,10 @@ const online = {
   unsub: null
 };
 
-const onlinePanelEl = document.getElementById('onlinePanel');
 const onlineLobbyEl = document.getElementById('onlineLobby');
 const onlineActiveEl = document.getElementById('onlineActive');
 const onlineErrorEl = document.getElementById('onlineError');
 const roomCodeDisplayEl = document.getElementById('roomCodeDisplay');
-const onlineStatusTextEl = document.getElementById('onlineStatusText');
 const joinRoomInput = document.getElementById('joinRoomInput');
 const createRoomBtn = document.getElementById('createRoomBtn');
 const joinRoomBtn = document.getElementById('joinRoomBtn');
@@ -925,12 +1121,15 @@ function serializeRoomFromGame(){
     historyNotation: game.history.map(h => h.notation),
     over: game.over,
     result: game.result,
+    winner: game.winner || null,
+    endReason: game.endReason || null,
     lastMove: game.lastMove || null
   };
 }
 
 function loadRemoteState(data){
   if(!data.boardJSON) return;
+  const prevLen = game.history.length;
   game.board = JSON.parse(data.boardJSON);
   game.turn = data.turn;
   game.castling = data.castling;
@@ -939,6 +1138,8 @@ function loadRemoteState(data){
   game.capturedByBlack = data.capturedByBlack || [];
   game.over = !!data.over;
   game.result = data.result || null;
+  game.winner = data.winner || null;
+  game.endReason = data.endReason || null;
   game.lastMove = data.lastMove || null;
   game.history = (data.historyNotation || []).map(n => ({ notation: n }));
   game.selected = null;
@@ -947,21 +1148,15 @@ function loadRemoteState(data){
   updateMoveList();
   updateCaptures();
   updateStatus();
+
+  // Only announce check / mate for moves that arrived from the opponent.
+  const newMove = game.history.length > prevLen;
+  if(newMove && game.over && game.endReason === 'checkmate') flashBanner('Checkmate', 'mate');
+  else if(newMove && !game.over && inCheck(game.board, game.turn)) flashBanner('Check!', 'check');
+  if(game.over && game.winner) scheduleGameOver();
 }
 
-function updateOnlineStatusText(){
-  const players = online.players || {};
-  const oppColor = online.myColor === 'w' ? 'b' : 'w';
-  const oppName = players[oppColor];
-  if(game.over){
-    onlineStatusTextEl.textContent = (game.result || 'Game over') + '.';
-  } else if(!oppName){
-    onlineStatusTextEl.textContent = 'Share the code — waiting for an opponent…';
-  } else {
-    const myTurn = game.turn === online.myColor;
-    onlineStatusTextEl.textContent = `Playing ${oppName} — you are ${online.myColor === 'w' ? 'White' : 'Black'} — ${myTurn ? 'your move' : "opponent's move"}.`;
-  }
-}
+function updateOnlineStatusText(){ updateGameInfo(); }
 
 function recordOnlineGameEnd(moverColor, resultText){
   const players = online.players;
@@ -984,6 +1179,8 @@ function subscribeRoom(code){
     online.status = data.status || online.status;
     loadRemoteState(data);
     updateOnlineStatusText();
+    // Host: the moment an opponent joins, leave the lobby and start playing.
+    if(currentView === 'lobby' && online.status === 'active' && online.myColor) enterOnlineGame();
   }, (err) => {
     console.error('Room listener error', err);
     showOnlineError('Lost connection to the room.');
@@ -991,8 +1188,12 @@ function subscribeRoom(code){
 }
 
 function startFreshOnlineGame(){
-  newGame();
-  game.mode = 'online';
+  newGame({ mode: 'online' });
+}
+
+function enterOnlineGame(){
+  game.flipped = online.myColor === 'b';
+  showGame();
 }
 
 async function createRoom(){
@@ -1053,7 +1254,7 @@ async function joinRoom(){
     onlineLobbyEl.classList.add('hidden');
     onlineActiveEl.classList.remove('hidden');
     roomCodeDisplayEl.textContent = code;
-    updateOnlineStatusText();
+    enterOnlineGame();
   }catch(err){
     console.error(err);
     showOnlineError('Could not join that room — check your connection and Firestore setup.');
@@ -1069,6 +1270,9 @@ async function leaveOrResign(){
     const oppName = players[oppColor];
     const myName = players[online.myColor];
     game.over = true;
+    game.overShown = true; // we're leaving; don't pop the result screen for ourselves
+    game.winner = oppColor;
+    game.endReason = 'resign';
     game.result = (oppColor === 'w' ? 'White' : 'Black') + ' wins — opponent resigned';
     try{
       const payload = serializeRoomFromGame();
@@ -1076,7 +1280,7 @@ async function leaveOrResign(){
       await updateDoc(doc(db, 'rooms', online.roomCode), payload);
     }catch(err){ console.error(err); }
     if(oppName && myName) recordResult(oppName, myName);
-  } else if(online.roomCode){
+  } else if(online.roomCode && online.status === 'waiting'){
     try{ await updateDoc(doc(db, 'rooms', online.roomCode), { status: 'abandoned' }); }catch(err){ /* ignore */ }
   }
   resetOnlineUI();
@@ -1090,51 +1294,114 @@ leaveRoomBtn.addEventListener('click', leaveOrResign);
 joinRoomInput.addEventListener('input', () => { joinRoomInput.value = joinRoomInput.value.toUpperCase(); });
 joinRoomInput.addEventListener('keydown', (e) => { if(e.key === 'Enter') joinRoomBtn.click(); });
 
-/* ---------------- Controls ---------------- */
+/* ---------------- Views: lobby and game ---------------- */
 
-document.getElementById('newGameBtn').addEventListener('click', () => {
+const lobbyViewEl = document.getElementById('lobbyView');
+const gameViewEl = document.getElementById('gameView');
+const newGameBtn = document.getElementById('newGameBtn');
+const undoBtn = document.getElementById('undoBtn');
+let currentView = 'lobby';
+
+function showGame(){
+  lobbyViewEl.classList.add('hidden');
+  gameViewEl.classList.remove('hidden');
+  currentView = 'game';
+  const isOnline = game.mode === 'online';
+  newGameBtn.classList.toggle('hidden', isOnline);
+  undoBtn.classList.toggle('hidden', isOnline);
+  checkBannerEl.className = 'check-banner';
+  render();
+  updateMoveList();
+  updateCaptures();
+  updateStatus();
+}
+
+function showLobby(){
+  clearTimeout(botTimer);
+  clearTimeout(overTimer);
+  gameOverModal.classList.add('hidden');
+  promoModal.classList.add('hidden');
+  gameViewEl.classList.add('hidden');
+  lobbyViewEl.classList.remove('hidden');
+  currentView = 'lobby';
+}
+
+let lastBotSetup = { difficulty: 'medium', colorChoice: 'w' };
+
+function startBotGame(difficulty, colorChoice){
+  lastBotSetup = { difficulty, colorChoice };
+  const humanColor = colorChoice === 'random' ? (Math.random() < 0.5 ? 'w' : 'b') : colorChoice;
+  newGame({ mode: 'computer', difficulty, humanColor });
+  showGame();
+  if(botColor() === 'w') botTimer = setTimeout(computerMove, 700);
+}
+
+function startFreeGame(){
+  newGame({ mode: 'two-player' });
+  showGame();
+}
+
+function restartCurrentGame(){
+  gameOverModal.classList.add('hidden');
+  if(game.mode === 'computer') startBotGame(lastBotSetup.difficulty, lastBotSetup.colorChoice);
+  else if(game.mode === 'two-player') startFreeGame();
+}
+
+async function leaveToLobby(){
+  if(game.mode === 'online'){
+    if(online.status === 'active' && !game.over){
+      if(!confirm('Leave this game? Leaving counts as a resignation.')) return;
+    }
+    await leaveOrResign();
+  }
+  showLobby();
+}
+
+/* ---------------- Lobby controls ---------------- */
+
+let lobbyDifficulty = 'medium';
+let lobbyColor = 'w';
+
+function wireSegment(id, onChange){
+  const el = document.getElementById(id);
+  el.addEventListener('click', (e) => {
+    const btn = e.target.closest('.mode-option');
+    if(!btn) return;
+    el.querySelectorAll('.mode-option').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    onChange(btn.dataset.value);
+  });
+}
+
+wireSegment('botDifficulty', v => { lobbyDifficulty = v; });
+wireSegment('botColor', v => { lobbyColor = v; });
+
+document.getElementById('startBotBtn').addEventListener('click', () => startBotGame(lobbyDifficulty, lobbyColor));
+document.getElementById('startFreeBtn').addEventListener('click', startFreeGame);
+
+/* ---------------- In-game controls ---------------- */
+
+newGameBtn.addEventListener('click', () => {
   if(game.mode === 'online') return;
-  const mode = game ? game.mode : 'two-player';
-  const difficulty = game ? game.difficulty : 'medium';
-  newGame();
-  game.mode = mode;
-  game.difficulty = difficulty;
+  restartCurrentGame();
 });
 
-document.getElementById('undoBtn').addEventListener('click', undoMove);
+undoBtn.addEventListener('click', undoMove);
 
 document.getElementById('flipBtn').addEventListener('click', () => {
   game.flipped = !game.flipped;
   render();
 });
 
-document.getElementById('modeToggle').addEventListener('click', (e) => {
-  const btn = e.target.closest('.mode-option');
-  if(!btn) return;
-  const newMode = btn.dataset.mode;
-  if(newMode === game.mode) return;
+document.getElementById('backToLobbyBtn').addEventListener('click', leaveToLobby);
 
-  if(game.mode === 'online' && online.roomCode){
-    if(online.status === 'active' && !game.over){
-      updateDoc(doc(db, 'rooms', online.roomCode), { status: 'abandoned' }).catch(()=>{});
-    }
-    resetOnlineUI();
-  }
+/* ---------------- Game-over screen buttons ---------------- */
 
-  document.querySelectorAll('#modeToggle .mode-option').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  game.mode = newMode;
-  difficultyToggleEl.classList.toggle('hidden', game.mode !== 'computer');
-  onlinePanelEl.classList.toggle('hidden', game.mode !== 'online');
-});
-
-const difficultyToggleEl = document.getElementById('difficultyToggle');
-difficultyToggleEl.addEventListener('click', (e) => {
-  const btn = e.target.closest('.mode-option');
-  if(!btn) return;
-  document.querySelectorAll('#difficultyToggle .mode-option').forEach(b => b.classList.remove('active'));
-  btn.classList.add('active');
-  game.difficulty = btn.dataset.difficulty;
+playAgainBtn.addEventListener('click', restartCurrentGame);
+document.getElementById('viewBoardBtn').addEventListener('click', () => gameOverModal.classList.add('hidden'));
+document.getElementById('resultLobbyBtn').addEventListener('click', () => {
+  gameOverModal.classList.add('hidden');
+  leaveToLobby();
 });
 
 /* ---------------- Boot ---------------- */
