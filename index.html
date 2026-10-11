@@ -22,17 +22,93 @@
     </div>
   </header>
 
-  <main class="layout">
+  <!-- ================= LOBBY ================= -->
+  <section id="lobbyView" class="lobby">
+
+    <div class="lobby-intro">
+      <h2>Choose how to play</h2>
+      <p>Take on the computer, move both sides yourself, or challenge a friend on another device.</p>
+    </div>
+
+    <div class="lobby-grid">
+
+      <article class="lobby-card">
+        <div class="lobby-icon">♜</div>
+        <h3>Play the computer</h3>
+        <p class="lobby-desc">Test yourself against the engine.</p>
+
+        <div class="field-label">Difficulty</div>
+        <div class="mode-toggle" id="botDifficulty">
+          <button class="mode-option" data-value="easy">Easy</button>
+          <button class="mode-option active" data-value="medium">Medium</button>
+          <button class="mode-option" data-value="hard">Hard</button>
+        </div>
+
+        <div class="field-label">You play</div>
+        <div class="mode-toggle" id="botColor">
+          <button class="mode-option active" data-value="w">White</button>
+          <button class="mode-option" data-value="b">Black</button>
+          <button class="mode-option" data-value="random">Random</button>
+        </div>
+
+        <button id="startBotBtn" class="btn btn-primary btn-block lobby-cta">Start game</button>
+      </article>
+
+      <article class="lobby-card">
+        <div class="lobby-icon">♞</div>
+        <h3>Free board</h3>
+        <p class="lobby-desc">Play against yourself. Move both White and Black, with undo and flip whenever you like — great for analysis.</p>
+        <div class="lobby-spacer"></div>
+        <button id="startFreeBtn" class="btn btn-primary btn-block lobby-cta">Open board</button>
+      </article>
+
+      <article class="lobby-card">
+        <div class="lobby-icon">♛</div>
+        <h3>Play a player</h3>
+        <p class="lobby-desc">Live games across devices. Create a room and share the code, or join a friend's.</p>
+
+        <div id="onlineLobby" class="online-block">
+          <button id="createRoomBtn" class="btn btn-primary btn-block">Create room</button>
+          <div class="online-divider">or</div>
+          <div class="online-join-row">
+            <input id="joinRoomInput" class="text-input" maxlength="5" placeholder="Room code" autocomplete="off">
+            <button id="joinRoomBtn" class="btn">Join</button>
+          </div>
+          <p id="onlineError" class="online-error hidden"></p>
+        </div>
+
+        <div id="onlineActive" class="online-block hidden">
+          <div class="room-code-row">
+            <span class="room-code-label">Room</span>
+            <span id="roomCodeDisplay" class="room-code"></span>
+          </div>
+          <p class="online-status-text">Share this code. The game starts as soon as your opponent joins…</p>
+          <button id="leaveRoomBtn" class="btn btn-danger btn-block">Cancel room</button>
+        </div>
+      </article>
+
+    </div>
+
+    <div class="panel leaderboard-panel lobby-leaderboard">
+      <h2 class="panel-title">Global leaderboard</h2>
+      <ol id="leaderboardList" class="leaderboard-list"></ol>
+    </div>
+
+  </section>
+
+  <!-- ================= GAME ================= -->
+  <main id="gameView" class="layout hidden">
 
     <section class="board-wrap">
-      <div class="board-frame">
-        <div class="files-row files-top" aria-hidden="true"></div>
+      <div id="boardFrame" class="board-frame">
         <div class="board-and-ranks">
           <div class="ranks-col" aria-hidden="true"></div>
-          <div id="board" class="board" role="grid" aria-label="Chess board"></div>
+          <div id="boardSurface" class="board-surface">
+            <div id="board" class="board" role="grid" aria-label="Chess board"></div>
+            <div id="checkBanner" class="check-banner" aria-hidden="true"></div>
+          </div>
           <div class="ranks-col ranks-col-right" aria-hidden="true"></div>
         </div>
-        <div class="files-row files-bottom" aria-hidden="true"></div>
       </div>
 
       <div class="status-bar">
@@ -47,48 +123,10 @@
 
     <aside class="sidebar">
 
-      <div class="panel mode-panel">
-        <h2 class="panel-title">Opponent</h2>
-        <div class="mode-toggle" id="modeToggle">
-          <button class="mode-option active" data-mode="two-player">Two players</button>
-          <button class="mode-option" data-mode="computer">Vs. computer</button>
-          <button class="mode-option" data-mode="online">Online</button>
-        </div>
-        <div class="mode-toggle difficulty-toggle hidden" id="difficultyToggle">
-          <button class="mode-option" data-difficulty="easy">Easy</button>
-          <button class="mode-option active" data-difficulty="medium">Medium</button>
-          <button class="mode-option" data-difficulty="hard">Hard</button>
-        </div>
-
-        <div class="online-panel hidden" id="onlinePanel">
-
-          <div id="onlineLobby" class="online-block">
-            <div class="online-row">
-              <button id="createRoomBtn" class="btn btn-primary btn-block">Create room</button>
-            </div>
-            <div class="online-divider">or</div>
-            <div class="online-row online-join-row">
-              <input id="joinRoomInput" class="text-input" maxlength="5" placeholder="Room code" autocomplete="off">
-              <button id="joinRoomBtn" class="btn">Join</button>
-            </div>
-            <p id="onlineError" class="online-error hidden"></p>
-          </div>
-
-          <div id="onlineActive" class="online-block hidden">
-            <div class="room-code-row">
-              <span class="room-code-label">Room</span>
-              <span id="roomCodeDisplay" class="room-code"></span>
-            </div>
-            <p id="onlineStatusText" class="online-status-text">Waiting for an opponent…</p>
-            <button id="leaveRoomBtn" class="btn btn-danger btn-block">Leave / Resign</button>
-          </div>
-
-        </div>
-      </div>
-
-      <div class="panel leaderboard-panel">
-        <h2 class="panel-title">Leaderboard</h2>
-        <ol id="leaderboardList" class="leaderboard-list"></ol>
+      <div class="panel game-info-panel">
+        <h2 id="gameInfoTitle" class="panel-title">Game</h2>
+        <p id="gameInfoText" class="game-info-text"></p>
+        <button id="backToLobbyBtn" class="btn btn-block">← Back to lobby</button>
       </div>
 
       <div class="panel captures-panel">
@@ -108,10 +146,16 @@
         <ol id="moveList" class="move-list"></ol>
       </div>
 
+      <div class="panel leaderboard-panel">
+        <h2 class="panel-title">Leaderboard</h2>
+        <ol id="leaderboardListGame" class="leaderboard-list"></ol>
+      </div>
+
     </aside>
 
   </main>
 
+  <!-- ================= MODALS ================= -->
   <div id="promoModal" class="modal hidden">
     <div class="modal-card">
       <p class="modal-title">Promote your pawn</p>
@@ -126,6 +170,35 @@
       <input id="usernameInput" class="text-input" maxlength="18" placeholder="Your name" autocomplete="off">
       <p id="usernameError" class="online-error hidden"></p>
       <button id="usernameSaveBtn" class="btn btn-primary btn-block">Save</button>
+    </div>
+  </div>
+
+  <div id="gameOverModal" class="modal hidden">
+    <div id="resultCard" class="modal-card result-card neutral">
+      <p id="resultKicker" class="result-kicker">Checkmate</p>
+      <h2 id="resultTitle" class="result-title">You won</h2>
+
+      <div class="result-players">
+        <div id="resultW" class="result-player">
+          <span class="rp-piece">♔</span>
+          <span class="rp-name">White</span>
+          <span class="rp-tag">Winner</span>
+        </div>
+        <div class="result-vs">vs</div>
+        <div id="resultB" class="result-player">
+          <span class="rp-piece">♚</span>
+          <span class="rp-name">Black</span>
+          <span class="rp-tag">Defeated</span>
+        </div>
+      </div>
+
+      <p id="resultMeta" class="result-meta"></p>
+
+      <div class="result-actions">
+        <button id="playAgainBtn" class="btn btn-primary btn-block">Play again</button>
+        <button id="viewBoardBtn" class="btn btn-block">View board</button>
+        <button id="resultLobbyBtn" class="btn btn-block">Back to lobby</button>
+      </div>
     </div>
   </div>
 
